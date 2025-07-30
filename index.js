@@ -5,12 +5,10 @@ const path = require('path');
 // --- Configuration ---
 const projectName = "zooart";
 const categoryUrl = 'https://zooart.com.pl/pol_m_Psy_Karma-dla-psow_Karma-bytowa-dla-psow_Sucha-karma-dla-psow-1345.html?filter_producer=1331637976&filter_promotion=&filter_series=&filter_traits%5B1332119889%5D=&filter_traits%5B1332118355%5D=&filter_traits%5B1332118360%5D=&filter_traits%5B1332121055%5D=';
-const headlessBrowser = false; // Set true for production
-const testing = true; // Set false to scrape all products
+const headlessBrowser = true; // Set true for production
+const testing = false; // Set false to scrape all products
 
-/**
- * Scrolls to the bottom of the page to trigger lazy-loading of all products.
- */
+// Scroll to bottom (trigger lazy loading)
 async function autoScroll(page) {
     await page.evaluate(async () => {
         await new Promise((resolve) => {
@@ -31,9 +29,7 @@ async function autoScroll(page) {
     });
 }
 
-/**
- * Navigates to the category page, handles cookies, and scrapes all product links.
- */
+// Navigate to category page, handle cookies, scrape all product links
 async function getProductLinks(page, url) {
     console.log('Navigating to category page...');
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
@@ -68,9 +64,7 @@ async function getProductLinks(page, url) {
     return productLinks;
 }
 
-/**
- * Scrapes detailed data for a single product from its page.
- */
+// Scrape detailed data for a single product
 async function scrapeProductData(page, productUrl) {
     console.log(`Scraping product: ${productUrl}`);
     try {
@@ -95,7 +89,6 @@ async function scrapeProductData(page, productUrl) {
             // Basic info
             data.title = document.querySelector('h1')?.textContent?.trim() || '';
             data.url = window.location.href;
-            // CORRECTED: Using the more specific selector for the brand on the product page
             data.brand = document.querySelector('.producer a.brand')?.textContent?.trim() || '';
             data.productCode = document.querySelector('.code strong')?.textContent?.trim() || '';
             data.series = document.querySelector('.series a')?.textContent?.trim() || '';
@@ -165,9 +158,7 @@ async function scrapeProductData(page, productUrl) {
     }
 }
 
-/**
- * Saves the scraped data to a dynamically named JSON file in a project-specific folder.
- */
+// Save data to JSON
 function saveToJson(data) {
     const now = new Date();
     const dateStamp = now.toISOString().slice(0, 10);
@@ -181,9 +172,6 @@ function saveToJson(data) {
     console.log(`Data successfully saved to ${filePath}`);
 }
 
-/**
- * Main function to run the scraper.
- */
 async function main() {
     let browser = null;
     try {

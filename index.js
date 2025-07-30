@@ -5,15 +5,35 @@ const path = require('path');
 const axios = require('axios');
 require('dotenv').config();
 
-// --- Configuration ---
-const openAImodel = 'gpt-4.1';
-const aiMaxTokens = 3000;
-const aiTemperature = 0.5;
+// --- Main Configuration ---
 const projectName = "zooart";
-const categoryUrl = 'https://zooart.com.pl/pol_m_Psy_Karma-dla-psow_Karma-bytowa-dla-psow_Sucha-karma-dla-psow-1345.html?filter_producer=1331637976&filter_promotion=&filter_series=&filter_traits%5B1332119889%5D=&filter_traits%5B1332118355%5D=&filter_traits%5B1332118360%5D=&filter_traits%5B1332121055%5D=';
+const categoryUrl = 'https://zooart.com.pl/pol_m_Psy_Karma-dla-psow_Karma-bytowa-dla-psow_Sucha-karma-dla-psow-1345.html?filter_producer=1331637976&counter=3';
 const headlessBrowser = true; // Set true for production
 const testing = false; // Set false to scrape all products
-const britFood = true;
+const britFood = true; // Set true to apply special formatting for "Brit" titles
+const PLN_TO_EUR_RATE = 0.23;
+const PROFIT_MARGIN = 0.10; // 10% profit margin
+const openAImodel = 'gpt-4.1';
+const aiMaxTokens = 4000;
+const aiTemperature = 0.5;
+const TRANSLATE_TITLE_WITH_AI = false; // Set to true to translate titles with AI
+
+// --- Helper & Logic Functions ---
+
+/**
+ * Converts a price from PLN to EUR, applies a profit margin, and rounds to 2 decimal places.
+ * @param {number} pricePLN - The price in Polish Złoty.
+ * @returns {number|null} The final price in EUR, or null if input is invalid.
+ */
+function convertPriceAndApplyMargin(pricePLN) {
+    if (pricePLN == null || typeof pricePLN !== 'number') {
+        return null;
+    }
+    const priceEUR = pricePLN * PLN_TO_EUR_RATE;
+    const priceWithMargin = priceEUR * (1 + PROFIT_MARGIN);
+    // Round to the nearest cent
+    return Math.round(priceWithMargin * 100) / 100;
+}
 
 async function callOpenAI(prompt, model = openAImodel) {
     console.log("--- Calling OpenAI API ---");
@@ -31,7 +51,7 @@ async function callOpenAI(prompt, model = openAImodel) {
             response_format: { type: "json_object" },
             messages: [{
                 role: "system",
-                content: "You are a helpful native Estonian translator designed to output JSON."
+                content: "You are a helpful native Estonian translator and e-commerce expert designed to output JSON."
             }, {
                 role: "user",
                 content: prompt
@@ -57,7 +77,7 @@ async function callOpenAI(prompt, model = openAImodel) {
 }
 
 async function processAndTranslateProduct(productData) {
-    // 1. Format Brit food title
+    // 1. Format Brit food title (runs before potential translation)
     if (britFood && productData.title && productData.title.toLowerCase().startsWith('brit')) {
         const parts = productData.title.split(' ').filter(p => p);
         if (parts.length >= 4) {
@@ -74,23 +94,44 @@ async function processAndTranslateProduct(productData) {
         }
     }
 
-    // 2. Translate descriptions with AI
+    // 2. Translate descriptions (and optionally title) with AI
     if (productData.shortDescription || productData.longDescription) {
-        console.log("Building combined prompt for translation...");
+        console.log("Building prompt for translation...");
+
+        // Dynamically build the prompt based on configuration
+        const includeTitleTranslation = TRANSLATE_TITLE_WITH_AI && productData.title;
+        const inputDataFields = [
+            includeTitleTranslation ? `- Polish Title: "${productData.title}"` : '',
+            `- Polish Short Description: "${productData.shortDescription}"`,
+            `- Polish Long Description: "${productData.longDescription}"`
+        ].filter(Boolean).join('\n');
+
+        const outputKeys = includeTitleTranslation ?
+            '"title", "shortDescription", and "longDescription"' :
+            '"shortDescription" and "longDescription"';
+
+        const titleInstruction = includeTitleTranslation ?
+            `1.  **For the "title" value:** Translate the Polish Title into an SEO-friendly Estonian product title.\n` : '';
+
+        const exampleJSON = includeTitleTranslation ?
+            `{\n  "title": "Tõlgitud pealkiri...",\n  "shortDescription": "Täissööt...",\n  "longDescription": "BRIT Premium By Nature on täisväärtuslik kuivtoit..."\n}` :
+            `{\n  "shortDescription": "Täissööt...",\n  "longDescription": "BRIT Premium By Nature on täisväärtuslik kuivtoit..."\n}`;
+
+
         const combinedPrompt = `
 You are an expert native Estonian translator and marketing copywriter, translating from Polish to Estonian for a pet food e-commerce site.
 
 ### TASK
-Process the provided Polish product information and generate two Estonian descriptions: a short one and a long one.
+Process the provided Polish product information and generate Estonian content.
 
 ### INPUT DATA
-- Polish Short Description: "${productData.shortDescription}"
-- Polish Long Description: "${productData.longDescription}"
+${inputDataFields}
 
 ### OUTPUT FORMAT
-Your final output MUST be a single, valid JSON object with two keys: "shortDescription" and "longDescription". Do not include any text outside of the JSON object.
+Your final output MUST be a single, valid JSON object with the keys: ${outputKeys}. Do not include any text outside of the JSON object.
 
 ### INSTRUCTIONS
+${titleInstruction}
 1.  **For the "shortDescription" value:** Translate the Polish Short Description into a concise, appealing Estonian marketing sentence.
 2.  **For the "longDescription" value:** Use the Polish Long Description to create a structured Estonian version. It must include:
     - A short, appealing summary paragraph.
@@ -98,10 +139,7 @@ Your final output MUST be a single, valid JSON object with two keys: "shortDescr
     - Preserve the formatting with newlines (\\n) within the JSON string value.
 
 Example JSON structure to return:
-{
-  "shortDescription": "Täissööt...",
-  "longDescription": "BRIT Premium By Nature on täisväärtuslik kuivtoit...\\n\\nSöötmistabel:\\n<tabel>\\n\\nKoostisosad:\\n<koostisosad>..."
-}`;
+${exampleJSON}`;
 
         const jsonResponseString = await callOpenAI(combinedPrompt);
 
@@ -109,6 +147,9 @@ Example JSON structure to return:
             try {
                 const translatedData = JSON.parse(jsonResponseString);
                 // Safely update the product data
+                if (includeTitleTranslation && translatedData.title) {
+                    productData.title = translatedData.title;
+                }
                 if (translatedData.shortDescription) {
                     productData.shortDescription = translatedData.shortDescription;
                 }
@@ -117,12 +158,11 @@ Example JSON structure to return:
                 }
             } catch (error) {
                 console.error("Failed to parse JSON response from OpenAI:", error);
-                // Fallback: keep the original Polish text if parsing fails
-                productData.shortDescription += " (Translation Failed)";
-                productData.longDescription += " (Translation Failed)";
+                productData.translationError = "Failed to parse JSON response from OpenAI.";
             }
         } else {
             console.error("No response from OpenAI. Keeping original Polish text.");
+            productData.translationError = "No response from OpenAI.";
         }
     }
 
@@ -173,6 +213,8 @@ async function scrapeProductData(page, productUrl) {
     try {
         await page.goto(productUrl, { waitUntil: 'networkidle2', timeout: 60000 });
         await page.waitForSelector('#projector_form', { timeout: 10000 });
+
+        // Scrape raw data from the page
         const productData = await page.evaluate(() => {
             const parseNumber = (text) => text ? parseFloat(text.replace(',', '.').replace(/[^0-9.]/g, '')) || null : null;
             const data = {};
@@ -198,6 +240,17 @@ async function scrapeProductData(page, productUrl) {
             data.productId = document.querySelector('input[name="product"]')?.value || '';
             return data;
         });
+
+        // Add EUR prices without overwriting original PLN prices
+        console.log('Converting prices to EUR with margin...');
+        productData.catalogPriceEUR = convertPriceAndApplyMargin(productData.catalogPrice);
+        productData.unitPriceEUR = convertPriceAndApplyMargin(productData.unitPrice);
+        if (productData.sizes && productData.sizes.length > 0) {
+            productData.sizes.forEach(size => {
+                size.priceEUR = convertPriceAndApplyMargin(size.price);
+            });
+        }
+
         productData.scrapedAt = new Date().toISOString();
         return productData;
     } catch (error) {
@@ -209,13 +262,15 @@ async function scrapeProductData(page, productUrl) {
 function saveToJson(data) {
     const now = new Date();
     const dateStamp = now.toISOString().slice(0, 10);
-    const timeStamp = now.toTimeString().slice(0, 5).replace(':', '_');
-    const fileName = `${dateStamp}--${timeStamp}.json`;
+    const timeStamp = now.toTimeString().slice(0, 8).replace(/:/g, '_');
+    const fileName = `${projectName}-${dateStamp}--${timeStamp}.json`;
     const dirPath = path.join('scraped', projectName);
     fs.mkdirSync(dirPath, { recursive: true });
     fs.writeFileSync(path.join(dirPath, fileName), JSON.stringify(data, null, 2), 'utf8');
     console.log(`Data successfully saved to ${path.join(dirPath, fileName)}`);
 }
+
+// --- Main Execution ---
 
 async function main() {
     if (!process.env.OPENAI_API_KEY) {
@@ -231,13 +286,18 @@ async function main() {
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
 
         const allProductLinks = await getProductLinks(page, categoryUrl);
-        if (allProductLinks.length === 0) {
-            console.log('No product links found. Exiting.');
+
+        // Filter out products with "GRATIS" in the title
+        const filteredLinks = allProductLinks.filter(link => !link.title.toUpperCase().includes('GRATIS'));
+        console.log(`\nFiltered out ${allProductLinks.length - filteredLinks.length} product(s) containing "GRATIS".`);
+
+        if (filteredLinks.length === 0) {
+            console.log('No valid product links found after filtering. Exiting.');
             return;
         }
 
-        let linksToProcess = testing ? allProductLinks.slice(0, 1) : allProductLinks;
-        if (testing) console.log(`--- TESTING MODE: Will scrape 1 of ${allProductLinks.length} products. ---`);
+        let linksToProcess = testing ? filteredLinks.slice(0, 1) : filteredLinks;
+        if (testing) console.log(`--- TESTING MODE: Will scrape 1 of ${filteredLinks.length} products. ---`);
 
         const scrapedProducts = [];
         console.log(`\nStarting to scrape ${linksToProcess.length} product(s)...`);
@@ -248,7 +308,7 @@ async function main() {
             let productData = await scrapeProductData(page, link.url);
 
             if (!productData.error) {
-                console.log('Post-processing data (formatting title, translating)...');
+                console.log('Post-processing data (formatting, translating)...');
                 productData = await processAndTranslateProduct(productData);
             }
 
@@ -261,7 +321,7 @@ async function main() {
             }
         }
 
-        console.log(`\nScraping completed! Total products scraped: ${scrapedProducts.length}`);
+        console.log(`\nScraping completed! Total products processed: ${scrapedProducts.length}`);
         if (scrapedProducts.length > 0) {
             saveToJson(scrapedProducts);
             console.log('\nSample of the first scraped product (with all transformations):');

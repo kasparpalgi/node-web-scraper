@@ -1,240 +1,248 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
+const path = require('path');
 
+// --- Configuration ---
+const projectName = "zooart";
 const categoryUrl = 'https://zooart.com.pl/pol_m_Psy_Karma-dla-psow_Karma-bytowa-dla-psow_Sucha-karma-dla-psow-1345.html?filter_producer=1331637976&filter_promotion=&filter_series=&filter_traits%5B1332119889%5D=&filter_traits%5B1332118355%5D=&filter_traits%5B1332118360%5D=&filter_traits%5B1332121055%5D=';
-const headlessBrowser = false; // set true for production
+const headlessBrowser = false; // Set true for production
+const testing = true; // Set false to scrape all products
 
-class ZooartScraper {
-    constructor() {
-        this.browser = null;
-        this.page = null;
-        this.products = [];
-    }
-
-    async init() {
-        this.browser = await puppeteer.launch({
-            headless: headlessBrowser,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
-        });
-        this.page = await this.browser.newPage();
-
-        // Set user agent to avoid detection
-        await this.page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
-
-        // Set viewport
-        await this.page.setViewport({ width: 1920, height: 1080 });
-    }
-
-    async getProductLinks(categoryUrl) {
-        console.log('Navigating to category page...');
-        await this.page.goto(categoryUrl, { waitUntil: 'networkidle2' });
-
-        // Wait for products to load
-        await this.page.waitForSelector('.product_wrapper', { timeout: 10000 });
-
-        const productLinks = await this.page.evaluate(() => {
-            const productElements = document.querySelectorAll('.product_wrapper .product-name');
-            return Array.from(productElements).map(element => {
-                return {
-                    url: element.href,
-                    title: element.textContent.trim()
-                };
-            });
-        });
-
-        console.log(`Found ${productLinks.length} products`);
-        return productLinks;
-    }
-
-    async scrapeProductData(productUrl) {
-        console.log(`Scraping product: ${productUrl}`);
-
-        try {
-            await this.page.goto(productUrl, { waitUntil: 'networkidle2' });
-
-            // Wait for the main product form to load
-            await this.page.waitForSelector('#projector_form', { timeout: 10000 });
-
-            const productData = await this.page.evaluate(() => {
-                const data = {};
-
-                // Basic product info
-                data.title = document.querySelector('h1')?.textContent?.trim() || '';
-                data.url = window.location.href;
-
-                // Brand/Producer
-                data.brand = document.querySelector('.brand')?.textContent?.trim() || '';
-
-                // Product code
-                data.productCode = document.querySelector('.code strong')?.textContent?.trim() || '';
-
-                // Series
-                data.series = document.querySelector('.series a')?.textContent?.trim() || '';
-
-                // Description
-                data.description = document.querySelector('.projector_description li')?.textContent?.trim() || '';
-
-                // Prices
-                data.catalogPrice = document.querySelector('#projector_price_srp')?.textContent?.trim() || '';
-                data.ourPrice = document.querySelector('#projector_price_value')?.textContent?.trim() || '';
-                data.unitPrice = document.querySelector('#unit_converted_price')?.textContent?.trim() || '';
-
-                // Availability/Shipping
-                data.shipping = document.querySelector('#projector_delivery_days')?.textContent?.trim() || '';
-
-                // Points
-                data.loyaltyPoints = document.querySelector('#projector_points_recive_points')?.textContent?.trim() || '';
-
-                // Labels (bestseller, etc.)
-                const labels = [];
-                document.querySelectorAll('.label_icons span').forEach(label => {
-                    labels.push(label.textContent.trim());
-                });
-                data.labels = labels;
-
-                // Images
-                const images = [];
-                document.querySelectorAll('#bx-pager img').forEach(img => {
-                    const zoomImage = img.getAttribute('data-zoom-image');
-                    if (zoomImage) {
-                        images.push('https://zooart.com.pl' + zoomImage);
-                    }
-                });
-                data.images = images;
-
-                // Product ID (from hidden input)
-                data.productId = document.querySelector('#projector_product_hidden')?.value || '';
-
-                // Size options
-                const sizes = [];
-                document.querySelectorAll('.sizes .select_button').forEach(sizeBtn => {
-                    sizes.push({
-                        type: sizeBtn.getAttribute('data-type'),
-                        name: sizeBtn.textContent.trim(),
-                        price: sizeBtn.getAttribute('data-price')
-                    });
-                });
-                data.sizes = sizes;
-
-                return data;
-            });
-
-            // Add timestamp
-            productData.scrapedAt = new Date().toISOString();
-
-            return productData;
-
-        } catch (error) {
-            console.error(`Error scraping product ${productUrl}:`, error.message);
-            return {
-                url: productUrl,
-                error: error.message,
-                scrapedAt: new Date().toISOString()
-            };
-        }
-    }
-
-    async scrapeAllProducts(categoryUrl, maxProducts = null) {
-        await this.init();
-
-        try {
-            // Get all product links
-            const productLinks = await this.getProductLinks(categoryUrl);
-
-            // Limit products if specified
-            const linksToProcess = maxProducts ? productLinks.slice(0, maxProducts) : productLinks;
-
-            console.log(`Starting to scrape ${linksToProcess.length} products...`);
-
-            // Scrape each product
-            for (let i = 0; i < linksToProcess.length; i++) {
-                const link = linksToProcess[i];
-                console.log(`Processing ${i + 1}/${linksToProcess.length}: ${link.title}`);
-
-                const productData = await this.scrapeProductData(link.url);
-                this.products.push(productData);
-
-                // Add delay to avoid being blocked
-                await this.delay(2000 + Math.random() * 3000);
-            }
-
-            console.log(`Scraping completed! Total products: ${this.products.length}`);
-            return this.products;
-
-        } catch (error) {
-            console.error('Error during scraping:', error);
-            throw error;
-        } finally {
-            await this.close();
-        }
-    }
-
-    async saveToJson(filename = 'zooart_products.json') {
-        const jsonData = JSON.stringify(this.products, null, 2);
-        fs.writeFileSync(filename, jsonData, 'utf8');
-        console.log(`Data saved to ${filename}`);
-    }
-
-    async saveToCSV(filename = 'zooart_products.csv') {
-        if (this.products.length === 0) return;
-
-        const headers = Object.keys(this.products[0]).filter(key => key !== 'images' && key !== 'sizes' && key !== 'labels');
-        const csvRows = [headers.join(',')];
-
-        this.products.forEach(product => {
-            const row = headers.map(header => {
-                let value = product[header] || '';
-                // Handle arrays by joining them
-                if (Array.isArray(value)) {
-                    value = value.join('; ');
+/**
+ * Scrolls to the bottom of the page to trigger lazy-loading of all products.
+ */
+async function autoScroll(page) {
+    await page.evaluate(async () => {
+        await new Promise((resolve) => {
+            let totalHeight = 0;
+            const distance = 100;
+            const timer = setInterval(() => {
+                const scrollHeight = document.body.scrollHeight;
+                window.scrollBy(0, distance);
+                totalHeight += distance;
+                if (totalHeight >= scrollHeight - window.innerHeight) {
+                    setTimeout(() => {
+                        clearInterval(timer);
+                        resolve();
+                    }, 500);
                 }
-                // Escape quotes and wrap in quotes if contains comma
-                value = value.toString().replace(/"/g, '""');
-                if (value.includes(',') || value.includes('"') || value.includes('\n')) {
-                    value = `"${value}"`;
-                }
-                return value;
-            });
-            csvRows.push(row.join(','));
+            }, 100);
         });
-
-        fs.writeFileSync(filename, csvRows.join('\n'), 'utf8');
-        console.log(`Data saved to ${filename}`);
-    }
-
-    delay(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
-    }
-
-    async close() {
-        if (this.browser) {
-            await this.browser.close();
-        }
-    }
+    });
 }
 
-// Usage example
-async function main() {
-    const scraper = new ZooartScraper();
+/**
+ * Navigates to the category page, handles cookies, and scrapes all product links.
+ */
+async function getProductLinks(page, url) {
+    console.log('Navigating to category page...');
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
 
     try {
-        // Scrape first 5 products for testing (remove limit for all products)
-        const products = await scraper.scrapeAllProducts(categoryUrl, 5);
+        console.log('Checking for cookie consent banner...');
+        const cookieButtonSelector = 'button.btn_accept_all_cookies';
+        await page.waitForSelector(cookieButtonSelector, { timeout: 5000 });
+        console.log('Cookie consent banner found. Clicking "Accept"...');
+        await page.click(cookieButtonSelector);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+    } catch (error) {
+        console.log('Cookie consent banner not found or already accepted. Continuing...');
+    }
 
-        // Save to files
-        await scraper.saveToJson();
-        await scraper.saveToCSV();
+    console.log('Waiting for the product container to load...');
+    await page.waitForSelector('#search .product_wrapper', { timeout: 10000 });
 
-        console.log('Sample scraped data:', JSON.stringify(products[0], null, 2));
+    console.log('Scrolling down to load all products...');
+    await autoScroll(page);
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    const productLinks = await page.evaluate(() => {
+        const productElements = document.querySelectorAll('#search .product_wrapper a.product-name');
+        return Array.from(productElements).map(element => ({
+            url: element.href,
+            title: element.textContent.trim()
+        }));
+    });
+
+    console.log(`Found ${productLinks.length} products on the page.`);
+    return productLinks;
+}
+
+/**
+ * Scrapes detailed data for a single product from its page.
+ */
+async function scrapeProductData(page, productUrl) {
+    console.log(`Scraping product: ${productUrl}`);
+    try {
+        await page.goto(productUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.waitForSelector('#projector_form', { timeout: 10000 });
+
+        const productData = await page.evaluate(() => {
+            const parseNumber = (text) => {
+                if (!text) return null;
+                try {
+                    const cleanedText = text.replace(',', '.').replace(/[^0-9.]/g, '');
+                    const number = parseFloat(cleanedText);
+                    return isNaN(number) ? null : number;
+                } catch (e) {
+                    return null;
+                }
+            };
+
+            const data = {};
+            const baseUrl = 'https://zooart.com.pl';
+
+            // Basic info
+            data.title = document.querySelector('h1')?.textContent?.trim() || '';
+            data.url = window.location.href;
+            // CORRECTED: Using the more specific selector for the brand on the product page
+            data.brand = document.querySelector('.producer a.brand')?.textContent?.trim() || '';
+            data.productCode = document.querySelector('.code strong')?.textContent?.trim() || '';
+            data.series = document.querySelector('.series a')?.textContent?.trim() || '';
+
+            // Descriptions
+            data.shortDescription = document.querySelector('.projector_description')?.textContent?.trim() || '';
+            const longDescElement = document.querySelector('.projector_longdescription');
+            data.longDescription = longDescElement ? longDescElement.innerText.trim() : '';
+
+            // Prices
+            data.catalogPrice = parseNumber(document.querySelector('#projector_price_srp')?.textContent);
+            data.unitPrice = parseNumber(document.querySelector('#unit_converted_price')?.textContent);
+
+            // Availability & Shipping
+            data.availability = document.querySelector('#projector_status div')?.textContent?.trim() || '';
+            data.shipping = document.querySelector('#projector_delivery_days')?.textContent?.trim() || '';
+
+            // Loyalty points
+            data.loyaltyPoints = parseNumber(document.querySelector('#projector_points_recive_points')?.textContent);
+
+            // Labels
+            data.labels = Array.from(document.querySelectorAll('.label_icons span')).map(el => el.textContent.trim());
+
+            // Images
+            const images = [];
+            document.querySelectorAll('#bx-pager img').forEach(img => {
+                const zoomImage = img.getAttribute('data-zoom-image');
+                if (zoomImage) {
+                    images.push(baseUrl + zoomImage);
+                }
+            });
+            if (images.length === 0) {
+                const mainImg = document.querySelector('#projector_main_photo a');
+                if (mainImg && mainImg.href) {
+                    images.push(mainImg.href);
+                }
+            }
+            data.images = images;
+
+            // Size/Variant options
+            const sizes = [];
+            document.querySelectorAll('.sizes a.select_button').forEach(sizeBtn => {
+                sizes.push({
+                    type: sizeBtn.getAttribute('data-type'),
+                    name: sizeBtn.textContent.trim(),
+                    price: parseNumber(sizeBtn.getAttribute('data-price'))
+                });
+            });
+            data.sizes = sizes;
+
+            // Product ID
+            data.productId = document.querySelector('input[name="product"]')?.value || '';
+
+            return data;
+        });
+
+        productData.scrapedAt = new Date().toISOString();
+        return productData;
 
     } catch (error) {
-        console.error('Scraping failed:', error);
+        console.error(`Error scraping product ${productUrl}:`, error.message);
+        return {
+            url: productUrl,
+            error: `Failed to scrape product page. ${error.message}`,
+            scrapedAt: new Date().toISOString()
+        };
     }
 }
 
-// Run the scraper
-if (require.main === module) {
-    main();
+/**
+ * Saves the scraped data to a dynamically named JSON file in a project-specific folder.
+ */
+function saveToJson(data) {
+    const now = new Date();
+    const dateStamp = now.toISOString().slice(0, 10);
+    const timeStamp = now.toTimeString().slice(0, 5).replace(':', '_');
+    const fileName = `${dateStamp}--${timeStamp}.json`;
+    const dirPath = path.join('scraped', projectName);
+    fs.mkdirSync(dirPath, { recursive: true });
+    const filePath = path.join(dirPath, fileName);
+    const jsonData = JSON.stringify(data, null, 2);
+    fs.writeFileSync(filePath, jsonData, 'utf8');
+    console.log(`Data successfully saved to ${filePath}`);
 }
 
-module.exports = ZooartScraper;
+/**
+ * Main function to run the scraper.
+ */
+async function main() {
+    let browser = null;
+    try {
+        console.log('Launching browser...');
+        browser = await puppeteer.launch({
+            headless: headlessBrowser,
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--start-maximized'],
+            defaultViewport: null
+        });
+        const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
+
+        const allProductLinks = await getProductLinks(page, categoryUrl);
+
+        if (allProductLinks.length === 0) {
+            console.log('No product links found. Exiting.');
+            return;
+        }
+
+        let linksToProcess = allProductLinks;
+
+        if (testing) {
+            console.log(`--- TESTING MODE ENABLED ---`);
+            console.log(`Found ${allProductLinks.length} total products. Will scrape 1 for demonstration.`);
+            linksToProcess = allProductLinks.slice(0, 1);
+        }
+
+        const scrapedProducts = [];
+        console.log(`\nStarting to scrape ${linksToProcess.length} product(s)...`);
+
+        for (let i = 0; i < linksToProcess.length; i++) {
+            const link = linksToProcess[i];
+            console.log(`\nProcessing ${i + 1}/${linksToProcess.length}: ${link.title}`);
+            const productData = await scrapeProductData(page, link.url);
+            scrapedProducts.push(productData);
+
+            if (i < linksToProcess.length - 1) {
+                const delay = 2000 + Math.random() * 2000;
+                console.log(`Waiting for ${Math.round(delay / 1000)}s...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+
+        console.log(`\nScraping completed! Total products scraped: ${scrapedProducts.length}`);
+
+        if (scrapedProducts.length > 0) {
+            saveToJson(scrapedProducts);
+            console.log('\nSample of the first scraped product:');
+            console.log(JSON.stringify(scrapedProducts[0], null, 2));
+        }
+
+    } catch (error) {
+        console.error('An error occurred during the scraping process:', error);
+    } finally {
+        if (browser) {
+            console.log('Closing browser...');
+            await browser.close();
+        }
+    }
+}
+
+main();

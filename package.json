@@ -17,6 +17,8 @@
   },
   "homepage": "https://github.com/kasparpalgi/node-web-scraper#readme",
   "dependencies": {
+    "axios": "^1.11.0",
+    "dotenv": "^17.2.1",
     "puppeteer": "^24.15.0"
   }
 }

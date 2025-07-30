@@ -2,36 +2,42 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
-const axios = require('axios'); // For making API requests
-require('dotenv').config(); // To load environment variables from .env file
+const axios = require('axios');
+require('dotenv').config();
 
 // --- Configuration ---
+const openAImodel = 'gpt-4.1';
+const aiMaxTokens = 3000;
+const aiTemperature = 0.5;
 const projectName = "zooart";
 const categoryUrl = 'https://zooart.com.pl/pol_m_Psy_Karma-dla-psow_Karma-bytowa-dla-psow_Sucha-karma-dla-psow-1345.html?filter_producer=1331637976&filter_promotion=&filter_series=&filter_traits%5B1332119889%5D=&filter_traits%5B1332118355%5D=&filter_traits%5B1332118360%5D=&filter_traits%5B1332121055%5D=';
 const headlessBrowser = true; // Set true for production
-const testing = true; // Set false to scrape all products
+const testing = false; // Set false to scrape all products
 const britFood = true;
 
-// --- OpenAI API Function ---
-async function callOpenAI(prompt, model = 'gpt-4-turbo') {
-    console.log("--- Calling OpenAI API... ---");
+async function callOpenAI(prompt, model = openAImodel) {
+    console.log("--- Calling OpenAI API ---");
     const apiKey = process.env.OPENAI_API_KEY;
 
     if (!apiKey) {
         console.error("OpenAI API key not found. Make sure it's set in your .env file.");
-        return "Translation failed: API key not configured.";
+        return null;
     }
 
     try {
         const response = await axios.post(
             'https://api.openai.com/v1/chat/completions', {
-            model: model, // Using the specified model, e.g., 'gpt-4-turbo' or 'gpt-4o'
+            model: model,
+            response_format: { type: "json_object" },
             messages: [{
+                role: "system",
+                content: "You are a helpful native Estonian translator designed to output JSON."
+            }, {
                 role: "user",
                 content: prompt
             }],
-            temperature: 0.5, // Controls randomness. Lower is more deterministic.
-            max_tokens: 2048, // Limit the length of the response
+            temperature: aiTemperature,
+            max_tokens: aiMaxTokens,
         }, {
             headers: {
                 'Content-Type': 'application/json',
@@ -40,24 +46,18 @@ async function callOpenAI(prompt, model = 'gpt-4-turbo') {
         }
         );
 
-        const translatedText = response.data.choices[0].message.content.trim();
-        console.log("--- OpenAI response received successfully. ---");
-        return translatedText;
+        const jsonString = response.data.choices[0].message.content;
+        console.log("--- OpenAI JSON response received successfully. ---");
+        return jsonString;
 
     } catch (error) {
         console.error("Error calling OpenAI API:", error.response ? error.response.data : error.message);
-        return `Translation failed due to API error: ${error.message}`;
+        return null;
     }
 }
 
-
-/**
- * Processes scraped data to format title and translate descriptions.
- * @param {object} productData - The raw scraped product data object.
- * @returns {Promise<object>} - The processed and translated product data object.
- */
 async function processAndTranslateProduct(productData) {
-    // --- 1. Format Brit food title ---
+    // 1. Format Brit food title
     if (britFood && productData.title && productData.title.toLowerCase().startsWith('brit')) {
         const parts = productData.title.split(' ').filter(p => p);
         if (parts.length >= 4) {
@@ -67,8 +67,6 @@ async function processAndTranslateProduct(productData) {
                 const size = parts[parts.length - 2];
                 const ageType = parts[parts.length - 3];
                 const seriesName = parts.slice(1, -3).join(' ');
-
-                // UPDATED: Using single quotes for the series name
                 productData.title = `${brand} '${seriesName}' - ${ageType} ${size} (${weight})`;
             } catch (e) {
                 console.log(`Could not auto-format title for "${productData.title}". Using original.`);
@@ -76,64 +74,73 @@ async function processAndTranslateProduct(productData) {
         }
     }
 
-    // --- 2. Translate short description ---
-    if (productData.shortDescription) {
-        console.log("Translating short description...");
-        const shortDescPrompt = `Translate the following Polish text to Estonian like a native speaker would write for a product description. Keep it concise. Provide only the translated text, nothing else.\n\nPolish text: "${productData.shortDescription}"`;
-        productData.shortDescription = await callOpenAI(shortDescPrompt);
-    }
+    // 2. Translate descriptions with AI
+    if (productData.shortDescription || productData.longDescription) {
+        console.log("Building combined prompt for translation...");
+        const combinedPrompt = `
+You are an expert native Estonian translator and marketing copywriter, translating from Polish to Estonian for a pet food e-commerce site.
 
-    // --- 3. Translate and summarize long description ---
-    if (productData.longDescription) {
-        console.log("Translating and summarizing long description...");
-        const longDescPrompt = `You are an expert translator specializing in pet food marketing copy, translating from Polish to Estonian.
-Your task is to process the provided Polish product description and create a shortened, structured Estonian version that is clear and easy to read.
+### TASK
+Process the provided Polish product information and generate two Estonian descriptions: a short one and a long one.
 
-Follow these steps:
-1.  **Summary:** From the introductory paragraphs of the Polish text, write a short, appealing summary in Estonian. It should explain what the product is, who it's for, and its main benefits.
-2.  **Structured Data:** Find the key data sections in the Polish text (like feeding table, ingredients, additives) and translate them directly, keeping the structure. Use Estonian headers.
+### INPUT DATA
+- Polish Short Description: "${productData.shortDescription}"
+- Polish Long Description: "${productData.longDescription}"
 
-The final output should be a single string with newlines separating the sections, exactly like this example structure:
-<Estonian summary paragraph>
+### OUTPUT FORMAT
+Your final output MUST be a single, valid JSON object with two keys: "shortDescription" and "longDescription". Do not include any text outside of the JSON object.
 
-Söötmistabel:
-<Translated feeding table>
+### INSTRUCTIONS
+1.  **For the "shortDescription" value:** Translate the Polish Short Description into a concise, appealing Estonian marketing sentence.
+2.  **For the "longDescription" value:** Use the Polish Long Description to create a structured Estonian version. It must include:
+    - A short, appealing summary paragraph.
+    - All structured data found (feeding table, ingredients/Koostisosad, additives/Toidulisandid, etc.), translated into Estonian.
+    - Preserve the formatting with newlines (\\n) within the JSON string value.
 
-Koostisosad:
-<Translated analytical constituents list>
+Example JSON structure to return:
+{
+  "shortDescription": "Täissööt...",
+  "longDescription": "BRIT Premium By Nature on täisväärtuslik kuivtoit...\\n\\nSöötmistabel:\\n<tabel>\\n\\nKoostisosad:\\n<koostisosad>..."
+}`;
 
-Toidulisandid 1 kg kohta:
-<Translated dietary additives list>
+        const jsonResponseString = await callOpenAI(combinedPrompt);
 
-<Translated final notes like metabolic energy, storage instructions, etc.>
-
----
-Here is the Polish text to process:
-${productData.longDescription}`;
-
-        productData.longDescription = await callOpenAI(longDescPrompt);
+        if (jsonResponseString) {
+            try {
+                const translatedData = JSON.parse(jsonResponseString);
+                // Safely update the product data
+                if (translatedData.shortDescription) {
+                    productData.shortDescription = translatedData.shortDescription;
+                }
+                if (translatedData.longDescription) {
+                    productData.longDescription = translatedData.longDescription;
+                }
+            } catch (error) {
+                console.error("Failed to parse JSON response from OpenAI:", error);
+                // Fallback: keep the original Polish text if parsing fails
+                productData.shortDescription += " (Translation Failed)";
+                productData.longDescription += " (Translation Failed)";
+            }
+        } else {
+            console.error("No response from OpenAI. Keeping original Polish text.");
+        }
     }
 
     return productData;
 }
 
 
-// --- Puppeteer Scraping Functions (Unchanged) ---
+// --- Puppeteer Scraping Functions ---
 
 async function autoScroll(page) {
     await page.evaluate(async () => {
         await new Promise((resolve) => {
-            let totalHeight = 0;
-            const distance = 100;
+            let totalHeight = 0; const distance = 100;
             const timer = setInterval(() => {
                 const scrollHeight = document.body.scrollHeight;
-                window.scrollBy(0, distance);
-                totalHeight += distance;
+                window.scrollBy(0, distance); totalHeight += distance;
                 if (totalHeight >= scrollHeight - window.innerHeight) {
-                    setTimeout(() => {
-                        clearInterval(timer);
-                        resolve();
-                    }, 500);
+                    setTimeout(() => { clearInterval(timer); resolve(); }, 500);
                 }
             }, 100);
         });
@@ -210,7 +217,6 @@ function saveToJson(data) {
     console.log(`Data successfully saved to ${path.join(dirPath, fileName)}`);
 }
 
-// --- Main Execution Logic ---
 async function main() {
     if (!process.env.OPENAI_API_KEY) {
         console.error("FATAL: OpenAI API key is missing. Please create a .env file with OPENAI_API_KEY=your_key.");

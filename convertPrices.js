@@ -3,9 +3,10 @@ const path = require('path');
 
 const PLN_TO_EUR = 0.23;
 const PROFIT_MARGIN = 0.10;
+const fileName = 'zooart-2025-07-30--20_29_54.json';
 
-const inputPath = path.join(__dirname, 'scraped/zooart/2025-07-30--18_15.json');
-const outputPath = path.join(__dirname, 'scraped/zooart/2025-07-30--18_15-eur.json');
+const inputPath = path.join(__dirname, 'scraped/zooart/' + fileName);
+const outputPath = path.join(__dirname, 'scraped/zooart/eur-' +  fileName);
 
 function convertPrice(pricePLN) {
     const eur = pricePLN * PLN_TO_EUR;

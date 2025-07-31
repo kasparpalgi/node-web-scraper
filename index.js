@@ -7,16 +7,16 @@ require('dotenv').config();
 
 // --- Main Configuration ---
 const projectName = "zooart";
-const categoryUrl = 'https://zooart.com.pl/pol_m_Psy_Karma-dla-psow_Karma-bytowa-dla-psow_Sucha-karma-dla-psow-1345.html?filter_producer=1331637976&counter=3';
+const categoryUrl = 'https://zooart.com.pl/pol_m_Psy_Zabawki-dla-psow_Pilki-1351.html?counter=1';
 const headlessBrowser = true; // Set true for production
 const testing = false; // Set false to scrape all products
-const britFood = true; // Set true to apply special formatting for "Brit" titles
+const britFood = false; // Set true to apply special formatting for "Brit" titles
 const PLN_TO_EUR_RATE = 0.23;
 const PROFIT_MARGIN = 0.10; // 10% profit margin
 const openAImodel = 'gpt-4.1';
 const aiMaxTokens = 4000;
 const aiTemperature = 0.5;
-const TRANSLATE_TITLE_WITH_AI = false; // Set to true to translate titles with AI
+const TRANSLATE_TITLE_WITH_AI = true; // Set to true to translate titles with AI
 
 // --- Helper & Logic Functions ---
 
